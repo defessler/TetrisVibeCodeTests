@@ -8,20 +8,23 @@
 
 #include <chrono>
 #include <memory>
-#include <unistd.h>
+#include <thread>
 
-// Drop-interval table indexed by level (ms)
-static long dropInterval(int level) {
-    static const long table[] = {800,720,630,550,470,380,300,220,130,100,80};
-    int idx = (level < 10) ? level : 10;
-    return table[idx];
+using namespace std::chrono_literals;
+using SteadyClock = std::chrono::steady_clock;
+
+// Drop-interval per level (Tetris guideline approximation)
+static constexpr std::chrono::milliseconds dropInterval(int level) noexcept {
+    constexpr std::chrono::milliseconds table[] = {
+        800ms,720ms,630ms,550ms,470ms,380ms,300ms,220ms,130ms,100ms,80ms
+    };
+    return table[(level < 10) ? level : 10];
 }
 
 int main() {
     // ── Renderer selection ────────────────────────────────────────────────────
     // Swap this line (or make it a factory / command-line arg) to change backend
     std::unique_ptr<Renderer> renderer = std::make_unique<AnsiRenderer>();
-
     renderer->init();
 
     // ── Game state ────────────────────────────────────────────────────────────
@@ -29,63 +32,69 @@ int main() {
 
     int curPiece  = nextBag();
     int curRot    = 0;
-    int curX      = 3, curY = -1;
+    int curX      = 3;
+    int curY      = -1;
     int nextPiece = nextBag();
-
-    int score = 0, level = 0, totalLines = 0;
+    int score     = 0;
+    int level     = 0;
+    int totalLines = 0;
+    int lockDelay  = 0;
     bool gameOver  = false;
-    int  lockDelay = 0;
 
-    using clock = std::chrono::steady_clock;
-    using ms    = std::chrono::milliseconds;
-    auto dropTime = clock::now();
+    auto dropTime = SteadyClock::now();
+
+    // Helper: lock active piece, clear lines, spawn next
+    auto spawnNext = [&]() -> bool {
+        lockPiece(board, curPiece, curRot, curX, curY);
+        const int cleared = clearLines(board);
+        totalLines += cleared;
+        score      += lineScore(cleared, level);
+        level       = totalLines / 10;
+
+        curPiece = nextPiece;
+        nextPiece = nextBag();
+        curRot = 0;
+        curX   = 3;
+        curY   = -1;
+        lockDelay = 0;
+        dropTime  = SteadyClock::now();
+
+        return fits(board, curPiece, curRot, curX, curY);  // false → game over
+    };
 
     // ── Main loop ─────────────────────────────────────────────────────────────
     while (!gameOver) {
         // Input
-        Action act = renderer->pollInput();
-        [[maybe_unused]] bool moved = false;
-
-        switch (act) {
-            case Action::Quit: goto done;
+        switch (renderer->pollInput()) {
+            case Action::Quit:
+                gameOver = true;
+                break;
 
             case Action::Left:
-                if (fits(board, curPiece, curRot, curX - 1, curY)) { --curX; moved = true; }
+                if (fits(board, curPiece, curRot, curX - 1, curY)) --curX;
                 break;
 
             case Action::Right:
-                if (fits(board, curPiece, curRot, curX + 1, curY)) { ++curX; moved = true; }
+                if (fits(board, curPiece, curRot, curX + 1, curY)) ++curX;
                 break;
 
             case Action::SoftDrop:
                 if (fits(board, curPiece, curRot, curX, curY + 1)) {
-                    ++curY; score += 1; moved = true;
-                    dropTime = clock::now();
+                    ++curY;
+                    ++score;
+                    dropTime = SteadyClock::now();
                 }
                 break;
 
             case Action::Rotate:
-                if (tryRotate(board, curPiece, curRot, curX, curY)) moved = true;
+                tryRotate(board, curPiece, curRot, curX, curY);
                 break;
 
             case Action::HardDrop: {
-                int gy = ghostRow(board, curPiece, curRot, curX, curY);
+                const int gy = ghostRow(board, curPiece, curRot, curX, curY);
                 score += 2 * (gy - curY);
                 curY = gy;
-                lockPiece(board, curPiece, curRot, curX, curY);
-                int cleared = clearLines(board);
-                totalLines += cleared;
-                score      += lineScore(cleared, level);
-                level       = totalLines / 10;
-
-                curPiece = nextPiece;
-                nextPiece = nextBag();
-                curRot = 0; curX = 3; curY = -1;
-                dropTime  = clock::now();
-                lockDelay = 0;
-
-                if (!fits(board, curPiece, curRot, curX, curY)) gameOver = true;
-                moved = true;
+                if (!spawnNext()) gameOver = true;
                 break;
             }
 
@@ -93,34 +102,18 @@ int main() {
         }
 
         // Gravity
-        long elapsed = std::chrono::duration_cast<ms>(clock::now() - dropTime).count();
-        if (elapsed >= dropInterval(level)) {
+        if (SteadyClock::now() - dropTime >= dropInterval(level)) {
             if (fits(board, curPiece, curRot, curX, curY + 1)) {
                 ++curY;
                 lockDelay = 0;
-            } else {
-                ++lockDelay;
-                if (lockDelay >= 1) {
-                    lockPiece(board, curPiece, curRot, curX, curY);
-                    int cleared = clearLines(board);
-                    totalLines += cleared;
-                    score      += lineScore(cleared, level);
-                    level       = totalLines / 10;
-
-                    curPiece = nextPiece;
-                    nextPiece = nextBag();
-                    curRot = 0; curX = 3; curY = -1;
-                    lockDelay = 0;
-
-                    if (!fits(board, curPiece, curRot, curX, curY)) gameOver = true;
-                    moved = true;
-                }
+            } else if (++lockDelay >= 1) {
+                if (!spawnNext()) gameOver = true;
             }
-            dropTime = clock::now();
+            dropTime = SteadyClock::now();
         }
 
         // Render
-        GameState state{
+        const GameState state{
             board,
             curPiece, curRot, curX, curY,
             ghostRow(board, curPiece, curRot, curX, curY),
@@ -129,12 +122,10 @@ int main() {
         };
         renderer->draw(state);
 
-        usleep(16000);  // ~60 fps cap
+        std::this_thread::sleep_for(16ms);  // ~60 fps cap
     }
 
-done:
-    if (gameOver)
-        renderer->drawGameOver(score);
+    if (gameOver) renderer->drawGameOver(score);
 
     renderer->shutdown();
     return 0;

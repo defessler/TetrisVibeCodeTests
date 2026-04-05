@@ -1,5 +1,5 @@
 CXX      := g++
-CXXFLAGS := -std=c++17 -O2 -Wall -Wextra
+CXXFLAGS := -std=c++20 -O2 -Wall -Wextra
 TARGET   := tetris
 SRCS     := main.cpp game.cpp ansi_renderer.cpp
 

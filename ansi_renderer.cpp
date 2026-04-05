@@ -1,12 +1,15 @@
 // ANSI terminal renderer implementation
 
 #include "ansi_renderer.h"
-#include <cstring>
 #include <iostream>
+#include <string_view>
+#include <thread>
 
-static const char* RESET = "\033[0m";
+using namespace std::chrono_literals;
 
-const char* AnsiRenderer::pieceColor(int id) {
+static constexpr std::string_view RESET = "\033[0m";
+
+const char* AnsiRenderer::pieceColor(int id) noexcept {
     switch (id) {
         case 1: return "\033[96m";  // I – cyan
         case 2: return "\033[93m";  // O – yellow
@@ -28,7 +31,7 @@ void AnsiRenderer::moveTo(int row, int col) const {
 void AnsiRenderer::init() {
     tcgetattr(STDIN_FILENO, &_saved);
     termios raw = _saved;
-    raw.c_lflag &= ~(ICANON | ECHO);
+    raw.c_lflag &= ~static_cast<unsigned>(ICANON | ECHO);
     raw.c_cc[VMIN]  = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
@@ -65,6 +68,7 @@ Action AnsiRenderer::pollInput() {
                     case 'B': return Action::SoftDrop;
                     case 'C': return Action::Right;
                     case 'D': return Action::Left;
+                    default:  break;
                 }
             }
         }
@@ -107,18 +111,18 @@ void AnsiRenderer::drawBoard(const Board& board) const {
 }
 
 void AnsiRenderer::drawPiece(int piece, int rot, int px, int py, int colorId) const {
-    const auto& shape = PIECES[piece][rot];
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
-            if (shape[r][c]) {
-                int br = py + r, bc = px + c;
+            if (PIECES[piece][rot][r][c]) {
+                const int br = py + r, bc = px + c;
                 if (br >= 0 && br < BOARD_H && bc >= 0 && bc < BOARD_W)
                     drawCell(BOARD_ROW + br, BOARD_COL + bc * 2, colorId);
             }
 }
 
 void AnsiRenderer::drawSidebar(int score, int level, int lines, int nextPiece) const {
-    auto pr = [&](int r, const std::string& s) {
+    // Print a line at row r, aligned to SIDE_COL; erase to end of line first
+    const auto pr = [&](int r, std::string_view s) {
         moveTo(r, SIDE_COL);
         std::cout << "\033[K" << s;
     };
@@ -139,10 +143,9 @@ void AnsiRenderer::drawSidebar(int score, int level, int lines, int nextPiece) c
         moveTo(BOARD_ROW + 15 + r, SIDE_COL);
         std::cout << "        ";
     }
-    const auto& shape = PIECES[nextPiece][0];
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
-            if (shape[r][c]) {
+            if (PIECES[nextPiece][0][r][c]) {
                 moveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
                 std::cout << pieceColor(nextPiece + 1) << "██" << RESET;
             }
@@ -163,13 +166,10 @@ void AnsiRenderer::draw(const GameState& s) {
 
     drawBoard(s.board);
 
-    // Ghost
     if (s.ghostY != s.curY)
         drawPiece(s.curPiece, s.curRot, s.curX, s.ghostY, 8);
 
-    // Active piece
     drawPiece(s.curPiece, s.curRot, s.curX, s.curY, s.curPiece + 1);
-
     drawSidebar(s.score, s.level, s.totalLines, s.nextPiece);
     std::cout.flush();
 }
@@ -183,6 +183,6 @@ void AnsiRenderer::drawGameOver(int score) {
     std::cout << "\033[41m\033[97m  Press any key \033[0m";
     std::cout.flush();
 
-    // Drain any buffered input, then wait for a new keypress
-    while (pollInput() == Action::None) usleep(50000);
+    while (pollInput() == Action::None)
+        std::this_thread::sleep_for(50ms);
 }
