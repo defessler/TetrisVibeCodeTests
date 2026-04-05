@@ -1,13 +1,22 @@
 // ANSI terminal renderer — double-buffered implementation
 
 #include "ansi_renderer.h"
-#include <iostream>
 #include <string_view>
 #include <thread>
 
 using namespace std::chrono_literals;
 
 static constexpr std::string_view RESET = "\033[0m";
+
+// Write all bytes to fd, retrying on partial writes.
+static void writeAll(int fd, const char* p, std::size_t n) {
+    while (n > 0) {
+        ssize_t r = write(fd, p, n);
+        if (r <= 0) return;
+        p += r;
+        n -= static_cast<std::size_t>(r);
+    }
+}
 
 const char* AnsiRenderer::pieceColor(int id) noexcept {
     switch (id) {
@@ -38,14 +47,12 @@ void AnsiRenderer::init() {
     for (auto& row : _front) row.fill(-1);
     _buf.reserve(8192);
 
-    std::cout << "\033[?25l\033[2J";  // hide cursor, clear screen
-    std::cout.flush();
+    writeAll(STDOUT_FILENO, "\033[?25l\033[2J", 10);  // hide cursor, clear screen
 }
 
 void AnsiRenderer::shutdown() {
     tcsetattr(STDIN_FILENO, TCSANOW, &_saved);
-    std::cout << "\033[?25h\033[2J\033[H";
-    std::cout.flush();
+    writeAll(STDOUT_FILENO, "\033[?25h\033[2J\033[H", 12);  // show cursor, clear screen
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
@@ -227,9 +234,17 @@ void AnsiRenderer::draw(const GameState& s) {
 
     flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
 
-    // Single write syscall for the whole frame
-    std::cout << _buf;
-    std::cout.flush();
+    if (_buf.empty()) return;
+
+    // Synchronized output: tell the terminal to hold rendering until ESU.
+    // Supported by kitty, iTerm2, VTE (GNOME Terminal, Tilix), foot, etc.
+    // Terminals that don't support it ignore the sequences harmlessly.
+    static constexpr std::string_view BSU = "\033[?2026h";  // Begin Sync Update
+    static constexpr std::string_view ESU = "\033[?2026l";  // End   Sync Update
+
+    // Single writeAll call — atomic delivery, avoids stdio layers
+    const std::string frame = std::string(BSU) + _buf + std::string(ESU);
+    writeAll(STDOUT_FILENO, frame.data(), frame.size());
 }
 
 // ── Game over ─────────────────────────────────────────────────────────────────
@@ -241,8 +256,7 @@ void AnsiRenderer::drawGameOver(int score) {
     _buf += "\033[41m\033[97m  Score: " + std::to_string(score) + "     \033[0m";
     appendMoveTo(BOARD_ROW + BOARD_H / 2 + 1, BOARD_COL - 1);
     _buf += "\033[41m\033[97m  Press any key \033[0m";
-    std::cout << _buf;
-    std::cout.flush();
+    writeAll(STDOUT_FILENO, _buf.data(), _buf.size());
     _buf.clear();
 
     while (pollInput() == Action::None)
