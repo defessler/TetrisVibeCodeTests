@@ -97,16 +97,6 @@ void AnsiRenderer::appendMoveTo(int row, int col) {
     _buf += 'H';
 }
 
-void AnsiRenderer::appendCell(int colorId) {
-    if (colorId == 0) {
-        _buf += "  ";
-    } else {
-        _buf += pieceColor(colorId);
-        _buf += "██";
-        _buf += RESET;
-    }
-}
-
 // ── Border (drawn once) ───────────────────────────────────────────────────────
 
 void AnsiRenderer::drawBorder() {
@@ -223,14 +213,33 @@ void AnsiRenderer::draw(const GameState& s) {
                     back[br][bc] = s.curPiece + 1;
             }
 
-    // ── Diff front vs back, emit only changed cells ──────────────────────────
-    for (int r = 0; r < BOARD_H; ++r)
-        for (int c = 0; c < BOARD_W; ++c)
-            if (back[r][c] != _front[r][c]) {
-                appendMoveTo(BOARD_ROW + r, BOARD_COL + c * 2);
-                appendCell(back[r][c]);
-                _front[r][c] = back[r][c];
+    // ── Diff: row-based scan ─────────────────────────────────────────────────
+    // For each row that has at least one changed cell, write the whole row with
+    // a single moveTo then sequential cell output — no cursor jumping within a
+    // row, and far fewer escape sequences than one moveTo-per-cell.
+    for (int r = 0; r < BOARD_H; ++r) {
+        // Quick dirty-check: skip rows with no changes
+        bool dirty = false;
+        for (int c = 0; c < BOARD_W && !dirty; ++c)
+            dirty = (back[r][c] != _front[r][c]);
+        if (!dirty) continue;
+
+        appendMoveTo(BOARD_ROW + r, BOARD_COL);
+
+        // Color-run compression: only emit a new color escape when the color
+        // actually changes between adjacent cells.
+        int curColor = -1;
+        for (int c = 0; c < BOARD_W; ++c) {
+            const int id = back[r][c];
+            if (id != curColor) {
+                _buf += (id == 0) ? RESET : std::string_view{pieceColor(id)};
+                curColor = id;
             }
+            _buf += (id == 0) ? "  " : "██";
+            _front[r][c] = id;
+        }
+        if (curColor != 0) _buf += RESET;  // leave terminal in default color
+    }
 
     flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
 

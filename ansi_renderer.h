@@ -40,7 +40,6 @@ private:
     static constexpr int SIDE_COL  = BOARD_COL + BOARD_W * 2 + 3;
 
     void appendMoveTo(int row, int col);
-    void appendCell(int colorId);
     void drawBorder();
     void flushSidebar(int score, int level, int lines, int nextPiece);
 
