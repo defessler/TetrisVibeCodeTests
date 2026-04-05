@@ -1,4 +1,4 @@
-// ANSI terminal renderer implementation
+// ANSI terminal renderer — double-buffered implementation
 
 #include "ansi_renderer.h"
 #include <iostream>
@@ -24,9 +24,7 @@ const char* AnsiRenderer::pieceColor(int id) noexcept {
     }
 }
 
-void AnsiRenderer::moveTo(int row, int col) const {
-    std::cout << "\033[" << row << ";" << col << "H";
-}
+// ── Init / shutdown ───────────────────────────────────────────────────────────
 
 void AnsiRenderer::init() {
     tcgetattr(STDIN_FILENO, &_saved);
@@ -35,8 +33,12 @@ void AnsiRenderer::init() {
     raw.c_cc[VMIN]  = 0;
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-    std::cout << "\033[?25l"  // hide cursor
-              << "\033[2J";   // clear screen
+
+    // Mark every cell as not-yet-drawn so the first frame writes everything
+    for (auto& row : _front) row.fill(-1);
+    _buf.reserve(8192);
+
+    std::cout << "\033[?25l\033[2J";  // hide cursor, clear screen
     std::cout.flush();
 }
 
@@ -45,6 +47,8 @@ void AnsiRenderer::shutdown() {
     std::cout << "\033[?25h\033[2J\033[H";
     std::cout.flush();
 }
+
+// ── Input ─────────────────────────────────────────────────────────────────────
 
 Action AnsiRenderer::pollInput() {
     fd_set fds;
@@ -76,112 +80,170 @@ Action AnsiRenderer::pollInput() {
     return Action::None;
 }
 
-void AnsiRenderer::drawCell(int termRow, int termCol, int colorId) const {
-    moveTo(termRow, termCol);
+// ── Output helpers (append to _buf, never write directly) ────────────────────
+
+void AnsiRenderer::appendMoveTo(int row, int col) {
+    _buf += "\033[";
+    _buf += std::to_string(row);
+    _buf += ';';
+    _buf += std::to_string(col);
+    _buf += 'H';
+}
+
+void AnsiRenderer::appendCell(int colorId) {
     if (colorId == 0) {
-        std::cout << "  ";
+        _buf += "  ";
     } else {
-        std::cout << pieceColor(colorId) << "██" << RESET;
+        _buf += pieceColor(colorId);
+        _buf += "██";
+        _buf += RESET;
     }
 }
 
-void AnsiRenderer::drawBorder() const {
-    moveTo(BOARD_ROW - 1, BOARD_COL - 1);
-    std::cout << pieceColor(9) << "┌";
-    for (int c = 0; c < BOARD_W; ++c) std::cout << "──";
-    std::cout << "┐" << RESET;
+// ── Border (drawn once) ───────────────────────────────────────────────────────
+
+void AnsiRenderer::drawBorder() {
+    _buf += pieceColor(9);
+
+    appendMoveTo(BOARD_ROW - 1, BOARD_COL - 1);
+    _buf += "┌";
+    for (int c = 0; c < BOARD_W; ++c) _buf += "──";
+    _buf += "┐";
 
     for (int r = 0; r < BOARD_H; ++r) {
-        moveTo(BOARD_ROW + r, BOARD_COL - 1);
-        std::cout << pieceColor(9) << "│" << RESET;
-        moveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2);
-        std::cout << pieceColor(9) << "│" << RESET;
+        appendMoveTo(BOARD_ROW + r, BOARD_COL - 1);
+        _buf += "│";
+        appendMoveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2);
+        _buf += "│";
     }
 
-    moveTo(BOARD_ROW + BOARD_H, BOARD_COL - 1);
-    std::cout << pieceColor(9) << "└";
-    for (int c = 0; c < BOARD_W; ++c) std::cout << "──";
-    std::cout << "┘" << RESET;
+    appendMoveTo(BOARD_ROW + BOARD_H, BOARD_COL - 1);
+    _buf += "└";
+    for (int c = 0; c < BOARD_W; ++c) _buf += "──";
+    _buf += "┘";
+
+    _buf += RESET;
 }
 
-void AnsiRenderer::drawBoard(const Board& board) const {
-    for (int r = 0; r < BOARD_H; ++r)
-        for (int c = 0; c < BOARD_W; ++c)
-            drawCell(BOARD_ROW + r, BOARD_COL + c * 2, board[r][c]);
-}
+// ── Sidebar (only changed values are rewritten) ───────────────────────────────
 
-void AnsiRenderer::drawPiece(int piece, int rot, int px, int py, int colorId) const {
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-            if (PIECES[piece][rot][r][c]) {
-                const int br = py + r, bc = px + c;
-                if (br >= 0 && br < BOARD_H && bc >= 0 && bc < BOARD_W)
-                    drawCell(BOARD_ROW + br, BOARD_COL + bc * 2, colorId);
-            }
-}
-
-void AnsiRenderer::drawSidebar(int score, int level, int lines, int nextPiece) const {
-    // Print a line at row r, aligned to SIDE_COL; erase to end of line first
-    const auto pr = [&](int r, std::string_view s) {
-        moveTo(r, SIDE_COL);
-        std::cout << "\033[K" << s;
+void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) {
+    const auto pr = [&](int r, const std::string& s) {
+        appendMoveTo(r, SIDE_COL);
+        _buf += "\033[K";
+        _buf += s;
     };
 
-    pr(BOARD_ROW,     "┌─────────────┐");
-    pr(BOARD_ROW + 1, "│    TETRIS   │");
-    pr(BOARD_ROW + 2, "└─────────────┘");
-
-    pr(BOARD_ROW + 4,  "  SCORE");
-    pr(BOARD_ROW + 5,  "  " + std::to_string(score));
-    pr(BOARD_ROW + 7,  "  LEVEL");
-    pr(BOARD_ROW + 8,  "  " + std::to_string(level));
-    pr(BOARD_ROW + 10, "  LINES");
-    pr(BOARD_ROW + 11, "  " + std::to_string(lines));
-    pr(BOARD_ROW + 13, "  NEXT");
-
-    for (int r = 0; r < 4; ++r) {
-        moveTo(BOARD_ROW + 15 + r, SIDE_COL);
-        std::cout << "        ";
+    // Static header — written once alongside the border
+    if (!_borderDrawn) {
+        pr(BOARD_ROW,     "┌─────────────┐");
+        pr(BOARD_ROW + 1, "│    TETRIS   │");
+        pr(BOARD_ROW + 2, "└─────────────┘");
+        pr(BOARD_ROW + 4,  "  SCORE");
+        pr(BOARD_ROW + 7,  "  LEVEL");
+        pr(BOARD_ROW + 10, "  LINES");
+        pr(BOARD_ROW + 13, "  NEXT");
+        pr(BOARD_ROW + 20, "  CONTROLS");
+        pr(BOARD_ROW + 21, "  ←→  move");
+        pr(BOARD_ROW + 22, "  ↑   rotate");
+        pr(BOARD_ROW + 23, "  ↓   soft drop");
+        pr(BOARD_ROW + 24, "  SPC hard drop");
+        pr(BOARD_ROW + 25, "  Q   quit");
     }
-    for (int r = 0; r < 4; ++r)
-        for (int c = 0; c < 4; ++c)
-            if (PIECES[nextPiece][0][r][c]) {
-                moveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
-                std::cout << pieceColor(nextPiece + 1) << "██" << RESET;
-            }
 
-    pr(BOARD_ROW + 20, "  CONTROLS");
-    pr(BOARD_ROW + 21, "  ←→  move");
-    pr(BOARD_ROW + 22, "  ↑   rotate");
-    pr(BOARD_ROW + 23, "  ↓   soft drop");
-    pr(BOARD_ROW + 24, "  SPC hard drop");
-    pr(BOARD_ROW + 25, "  Q   quit");
+    if (score != _prevScore) {
+        pr(BOARD_ROW + 5, "  " + std::to_string(score) + "      ");
+        _prevScore = score;
+    }
+    if (level != _prevLevel) {
+        pr(BOARD_ROW + 8, "  " + std::to_string(level));
+        _prevLevel = level;
+    }
+    if (lines != _prevLines) {
+        pr(BOARD_ROW + 11, "  " + std::to_string(lines));
+        _prevLines = lines;
+    }
+    if (nextPiece != _prevNext) {
+        // Clear previous next-piece preview
+        for (int r = 0; r < 4; ++r) {
+            appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL);
+            _buf += "        ";
+        }
+        // Draw new one
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                if (PIECES[nextPiece][0][r][c]) {
+                    appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
+                    _buf += pieceColor(nextPiece + 1);
+                    _buf += "██";
+                    _buf += RESET;
+                }
+        _prevNext = nextPiece;
+    }
 }
+
+// ── Main draw — double-buffered board diff ────────────────────────────────────
 
 void AnsiRenderer::draw(const GameState& s) {
-    if (_firstDraw) {
+    _buf.clear();
+
+    if (!_borderDrawn) {
         drawBorder();
-        _firstDraw = false;
+        _borderDrawn = true;
     }
 
-    drawBoard(s.board);
+    // ── Build back buffer ────────────────────────────────────────────────────
+    // Start with locked cells, then overlay ghost, then active piece.
+    Board back = s.board;
 
-    if (s.ghostY != s.curY)
-        drawPiece(s.curPiece, s.curRot, s.curX, s.ghostY, 8);
+    const auto& shape = PIECES[s.curPiece][s.curRot];
 
-    drawPiece(s.curPiece, s.curRot, s.curX, s.curY, s.curPiece + 1);
-    drawSidebar(s.score, s.level, s.totalLines, s.nextPiece);
+    if (s.ghostY != s.curY) {
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                if (shape[r][c]) {
+                    const int br = s.ghostY + r, bc = s.curX + c;
+                    if (br >= 0 && br < BOARD_H && bc >= 0 && bc < BOARD_W && !back[br][bc])
+                        back[br][bc] = 8;
+                }
+    }
+
+    for (int r = 0; r < 4; ++r)
+        for (int c = 0; c < 4; ++c)
+            if (shape[r][c]) {
+                const int br = s.curY + r, bc = s.curX + c;
+                if (br >= 0 && br < BOARD_H && bc >= 0 && bc < BOARD_W)
+                    back[br][bc] = s.curPiece + 1;
+            }
+
+    // ── Diff front vs back, emit only changed cells ──────────────────────────
+    for (int r = 0; r < BOARD_H; ++r)
+        for (int c = 0; c < BOARD_W; ++c)
+            if (back[r][c] != _front[r][c]) {
+                appendMoveTo(BOARD_ROW + r, BOARD_COL + c * 2);
+                appendCell(back[r][c]);
+                _front[r][c] = back[r][c];
+            }
+
+    flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
+
+    // Single write syscall for the whole frame
+    std::cout << _buf;
     std::cout.flush();
 }
 
+// ── Game over ─────────────────────────────────────────────────────────────────
+
 void AnsiRenderer::drawGameOver(int score) {
-    moveTo(BOARD_ROW + BOARD_H / 2 - 1, BOARD_COL - 1);
-    std::cout << "\033[41m\033[97m  GAME  OVER   \033[0m";
-    moveTo(BOARD_ROW + BOARD_H / 2,     BOARD_COL - 1);
-    std::cout << "\033[41m\033[97m  Score: " << score << "     \033[0m";
-    moveTo(BOARD_ROW + BOARD_H / 2 + 1, BOARD_COL - 1);
-    std::cout << "\033[41m\033[97m  Press any key \033[0m";
+    appendMoveTo(BOARD_ROW + BOARD_H / 2 - 1, BOARD_COL - 1);
+    _buf += "\033[41m\033[97m  GAME  OVER   \033[0m";
+    appendMoveTo(BOARD_ROW + BOARD_H / 2,     BOARD_COL - 1);
+    _buf += "\033[41m\033[97m  Score: " + std::to_string(score) + "     \033[0m";
+    appendMoveTo(BOARD_ROW + BOARD_H / 2 + 1, BOARD_COL - 1);
+    _buf += "\033[41m\033[97m  Press any key \033[0m";
+    std::cout << _buf;
     std::cout.flush();
+    _buf.clear();
 
     while (pollInput() == Action::None)
         std::this_thread::sleep_for(50ms);
