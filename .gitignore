@@ -2,3 +2,4 @@ tetris
 tetris-sdl2
 tests
 *.o
+# dist/ is intentionally tracked for pre-built binaries

@@ -1,0 +1,57 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build release binary
+        run: |
+          g++ -std=c++20 -O3 -DNDEBUG -s \
+              -o tetris-linux-x86_64 \
+              main.cpp game.cpp ansi_renderer.cpp
+
+      - name: Create tarball
+        run: |
+          tar -czf tetris-linux-x86_64.tar.gz tetris-linux-x86_64 README.md
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: tetris-linux-x86_64.tar.gz
+          body: |
+            ## Tetris — ${{ github.ref_name }}
+
+            A Tetris clone in C++20 using only the POSIX terminal (no external libraries).
+
+            ### Requirements
+            Linux x86-64, a terminal with ANSI colour support (any modern terminal).
+
+            ### Run
+            ```
+            tar -xzf tetris-linux-x86_64.tar.gz
+            ./tetris-linux-x86_64
+            ```
+
+            ### Controls
+            | Key | Action |
+            |-----|--------|
+            | ← → | Move |
+            | ↑ | Rotate (SRS) |
+            | ↓ | Soft drop |
+            | Space | Hard drop |
+            | Q | Quit |
+
+            ### Build from source
+            ```
+            git clone https://github.com/defessler/Tetris-
+            cd Tetris-
+            make
+            ./tetris
+            ```
