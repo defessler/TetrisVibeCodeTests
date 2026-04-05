@@ -13,7 +13,13 @@ $(TARGET): $(SRCS) game.h game_logic.h renderer.h ansi_renderer.h
 # tetris-sdl2: main_sdl2.cpp game.cpp sdl2_renderer.cpp
 #	$(CXX) $(CXXFLAGS) -o $@ $^ $(shell sdl2-config --cflags --libs)
 
-clean:
-	rm -f $(TARGET)
+tests: tests.cpp game.cpp test_runner.h game.h game_logic.h
+	$(CXX) $(CXXFLAGS) -o $@ tests.cpp game.cpp
 
-.PHONY: clean
+test: tests
+	./tests
+
+clean:
+	rm -f $(TARGET) tests
+
+.PHONY: test clean
