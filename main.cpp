@@ -1,10 +1,16 @@
 // main.cpp — game loop; renderer is injected via the Renderer interface.
-// To use a different backend, swap AnsiRenderer for your own Renderer subclass.
+// Renderer is selected at compile time via preprocessor.
 
 #include "game.h"
 #include "game_logic.h"
 #include "renderer.h"
-#include "ansi_renderer.h"   // ← change this include to switch renderers
+#ifdef _WIN32
+#  include "windows_renderer.h"
+   using PlatformRenderer = WindowsRenderer;
+#else
+#  include "ansi_renderer.h"
+   using PlatformRenderer = AnsiRenderer;
+#endif
 
 #include <chrono>
 #include <memory>
@@ -24,7 +30,7 @@ static constexpr std::chrono::milliseconds dropInterval(int level) noexcept {
 int main() {
     // ── Renderer selection ────────────────────────────────────────────────────
     // Swap this line (or make it a factory / command-line arg) to change backend
-    std::unique_ptr<Renderer> renderer = std::make_unique<AnsiRenderer>();
+    std::unique_ptr<Renderer> renderer = std::make_unique<PlatformRenderer>();
     renderer->init();
 
     // ── Game state ────────────────────────────────────────────────────────────
