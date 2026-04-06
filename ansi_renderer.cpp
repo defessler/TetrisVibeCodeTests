@@ -47,12 +47,20 @@ void AnsiRenderer::init() {
     for (auto& row : _front) row.fill(-1);
     _buf.reserve(8192);
 
-    writeAll(STDOUT_FILENO, "\033[?25l\033[2J", 10);  // hide cursor, clear screen
+    writeAll(STDOUT_FILENO,
+        "\033[?1049h"   // switch to alternate screen buffer (dedicated surface)
+        "\033[?25l"     // hide cursor
+        "\033[2J"       // clear alternate screen
+        "\033[H",       // cursor to top-left
+        20);
 }
 
 void AnsiRenderer::shutdown() {
     tcsetattr(STDIN_FILENO, TCSANOW, &_saved);
-    writeAll(STDOUT_FILENO, "\033[?25h\033[2J\033[H", 12);  // show cursor, clear screen
+    writeAll(STDOUT_FILENO,
+        "\033[?25h"    // show cursor
+        "\033[?1049l"  // restore normal screen buffer
+        , 12);
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
@@ -243,7 +251,13 @@ void AnsiRenderer::draw(const GameState& s) {
 
     flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
 
-    if (_buf.empty()) return;
+    // Park cursor at (1,1) — above all game content — so the NEXT frame's
+    // writes always travel strictly top-to-bottom with no backward jumps.
+    // A backward cursor movement triggers an immediate repaint on some
+    // terminals even inside a BSU/ESU block.
+    _buf += "\033[1;1H";
+
+    if (_buf == "\033[1;1H") return;  // only the park code — nothing changed
 
     // Synchronized output: tell the terminal to hold rendering until ESU.
     // Supported by kitty, iTerm2, VTE (GNOME Terminal, Tilix), foot, etc.
@@ -251,7 +265,7 @@ void AnsiRenderer::draw(const GameState& s) {
     static constexpr std::string_view BSU = "\033[?2026h";  // Begin Sync Update
     static constexpr std::string_view ESU = "\033[?2026l";  // End   Sync Update
 
-    // Single writeAll call — atomic delivery, avoids stdio layers
+    // Single writeAll — atomic delivery to PTY, avoids stdio buffering layers
     const std::string frame = std::string(BSU) + _buf + std::string(ESU);
     writeAll(STDOUT_FILENO, frame.data(), frame.size());
 }
