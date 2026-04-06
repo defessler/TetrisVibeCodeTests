@@ -1,6 +1,8 @@
 tetris
+tetris-pixel
 tetris-sdl2
 tetris.exe
+tetris-pixel.exe
 tests
 *.o
 # dist/ is intentionally tracked for pre-built binaries
