@@ -7,6 +7,9 @@
 #ifdef _WIN32
 #  include "windows_renderer.h"
    using PlatformRenderer = WindowsRenderer;
+#elif defined(PIXEL_ART)
+#  include "pixel_renderer.h"
+   using PlatformRenderer = PixelRenderer;
 #else
 #  include "ansi_renderer.h"
    using PlatformRenderer = AnsiRenderer;
