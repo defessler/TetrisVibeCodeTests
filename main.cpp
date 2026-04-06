@@ -4,7 +4,10 @@
 #include "game.h"
 #include "game_logic.h"
 #include "renderer.h"
-#ifdef _WIN32
+#if defined(_WIN32) && defined(PIXEL_ART)
+#  include "windows_pixel_renderer.h"
+   using PlatformRenderer = WindowsPixelRenderer;
+#elif defined(_WIN32)
 #  include "windows_renderer.h"
    using PlatformRenderer = WindowsRenderer;
 #elif defined(PIXEL_ART)

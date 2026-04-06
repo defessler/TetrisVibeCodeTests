@@ -6,10 +6,12 @@ SRCS     := main.cpp game.cpp ansi_renderer.cpp
 PIXEL_TARGET := tetris-pixel
 PIXEL_SRCS   := main.cpp game.cpp pixel_renderer.cpp
 
-WIN_CXX      := x86_64-w64-mingw32-g++
-WIN_CXXFLAGS := -std=c++20 -O3 -DNDEBUG -s -static
-WIN_TARGET   := tetris.exe
-WIN_SRCS     := main.cpp game.cpp windows_renderer.cpp
+WIN_CXX         := x86_64-w64-mingw32-g++
+WIN_CXXFLAGS    := -std=c++20 -O3 -DNDEBUG -s -static
+WIN_TARGET      := tetris.exe
+WIN_SRCS        := main.cpp game.cpp windows_renderer.cpp
+WIN_PIXEL_TARGET := tetris-pixel.exe
+WIN_PIXEL_SRCS  := main.cpp game.cpp windows_pixel_renderer.cpp
 
 # ── Default: Linux ANSI terminal build ───────────────────────────────────────
 $(TARGET): $(SRCS) game.h game_logic.h renderer.h ansi_renderer.h
@@ -24,6 +26,11 @@ windows: $(WIN_TARGET)
 $(WIN_TARGET): $(WIN_SRCS) game.h game_logic.h renderer.h windows_renderer.h
 	$(WIN_CXX) $(WIN_CXXFLAGS) -o $@ $(WIN_SRCS)
 
+# ── Windows pixel-art build ───────────────────────────────────────────────────
+windows-pixel: $(WIN_PIXEL_TARGET)
+$(WIN_PIXEL_TARGET): $(WIN_PIXEL_SRCS) game.h game_logic.h renderer.h windows_pixel_renderer.h
+	$(WIN_CXX) $(WIN_CXXFLAGS) -DPIXEL_ART -o $@ $(WIN_PIXEL_SRCS)
+
 # ── Tests (Linux only) ────────────────────────────────────────────────────────
 tests: tests.cpp game.cpp test_runner.h game.h game_logic.h
 	$(CXX) $(CXXFLAGS) -o $@ tests.cpp game.cpp
@@ -32,6 +39,6 @@ test: tests
 	./tests
 
 clean:
-	rm -f $(TARGET) $(PIXEL_TARGET) $(WIN_TARGET) tests
+	rm -f $(TARGET) $(PIXEL_TARGET) $(WIN_TARGET) $(WIN_PIXEL_TARGET) tests
 
-.PHONY: pixel windows test clean
+.PHONY: pixel windows windows-pixel test clean
