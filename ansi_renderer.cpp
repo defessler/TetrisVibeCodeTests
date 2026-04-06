@@ -1,4 +1,6 @@
-// ANSI terminal renderer — double-buffered implementation
+// ANSI terminal renderer
+// Writes the full board every frame inside a single BSU…ESU block,
+// delivered via one write() syscall. No partial-state risk.
 
 #include "ansi_renderer.h"
 #include <string_view>
@@ -6,9 +8,18 @@
 
 using namespace std::chrono_literals;
 
-static constexpr std::string_view RESET = "\033[0m";
+static constexpr std::string_view RESET  = "\033[0m";
+static constexpr std::string_view BSU    = "\033[?2026h";  // Begin Sync Update
+static constexpr std::string_view ESU    = "\033[?2026l";  // End   Sync Update
+static constexpr std::string_view ALTSCR = "\033[?1049h";  // enter alternate screen
+static constexpr std::string_view NORMSCR= "\033[?1049l";  // leave alternate screen
+static constexpr std::string_view HIDE   = "\033[?25l";    // hide cursor
+static constexpr std::string_view SHOW   = "\033[?25h";    // show cursor
+static constexpr std::string_view CLR    = "\033[2J";      // clear screen
+static constexpr std::string_view HOME   = "\033[H";       // cursor home
 
-// Write all bytes to fd, retrying on partial writes.
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 static void writeAll(int fd, const char* p, std::size_t n) {
     while (n > 0) {
         ssize_t r = write(fd, p, n);
@@ -43,24 +54,23 @@ void AnsiRenderer::init() {
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSANOW, &raw);
 
-    // Mark every cell as not-yet-drawn so the first frame writes everything
-    for (auto& row : _front) row.fill(-1);
     _buf.reserve(8192);
 
-    writeAll(STDOUT_FILENO,
-        "\033[?1049h"   // switch to alternate screen buffer (dedicated surface)
-        "\033[?25l"     // hide cursor
-        "\033[2J"       // clear alternate screen
-        "\033[H",       // cursor to top-left
-        20);
+    // Enter alternate screen, hide cursor, clear, go home
+    std::string init;
+    init += ALTSCR;
+    init += HIDE;
+    init += CLR;
+    init += HOME;
+    writeAll(STDOUT_FILENO, init.data(), init.size());
 }
 
 void AnsiRenderer::shutdown() {
+    std::string quit;
+    quit += SHOW;
+    quit += NORMSCR;
+    writeAll(STDOUT_FILENO, quit.data(), quit.size());
     tcsetattr(STDIN_FILENO, TCSANOW, &_saved);
-    writeAll(STDOUT_FILENO,
-        "\033[?25h"    // show cursor
-        "\033[?1049l"  // restore normal screen buffer
-        , 12);
 }
 
 // ── Input ─────────────────────────────────────────────────────────────────────
@@ -80,8 +90,8 @@ Action AnsiRenderer::pollInput() {
 
     if (c == '\033') {
         unsigned char seq[2] = {0, 0};
-        if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[') {
-            if (read(STDIN_FILENO, &seq[1], 1) == 1) {
+        if (read(STDIN_FILENO, &seq[0], 1) == 1 && seq[0] == '[')
+            if (read(STDIN_FILENO, &seq[1], 1) == 1)
                 switch (seq[1]) {
                     case 'A': return Action::Rotate;
                     case 'B': return Action::SoftDrop;
@@ -89,13 +99,11 @@ Action AnsiRenderer::pollInput() {
                     case 'D': return Action::Left;
                     default:  break;
                 }
-            }
-        }
     }
     return Action::None;
 }
 
-// ── Output helpers (append to _buf, never write directly) ────────────────────
+// ── Buffer helpers ────────────────────────────────────────────────────────────
 
 void AnsiRenderer::appendMoveTo(int row, int col) {
     _buf += "\033[";
@@ -105,105 +113,69 @@ void AnsiRenderer::appendMoveTo(int row, int col) {
     _buf += 'H';
 }
 
-// ── Border (drawn once) ───────────────────────────────────────────────────────
+// Append a fixed-width field: value string left-aligned, padded to `width`
+// with spaces. Avoids \033[K (erase-to-EOL) which causes a visible blank flash.
+static void appendPadded(std::string& buf, std::string_view val, int width) {
+    buf += val;
+    for (int i = static_cast<int>(val.size()); i < width; ++i) buf += ' ';
+}
 
-void AnsiRenderer::drawBorder() {
+// ── Static frame (border + sidebar labels) — written once ────────────────────
+
+void AnsiRenderer::drawStatic() {
+    // Border
     _buf += pieceColor(9);
-
     appendMoveTo(BOARD_ROW - 1, BOARD_COL - 1);
     _buf += "┌";
     for (int c = 0; c < BOARD_W; ++c) _buf += "──";
     _buf += "┐";
-
     for (int r = 0; r < BOARD_H; ++r) {
-        appendMoveTo(BOARD_ROW + r, BOARD_COL - 1);
-        _buf += "│";
-        appendMoveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2);
-        _buf += "│";
+        appendMoveTo(BOARD_ROW + r, BOARD_COL - 1);      _buf += "│";
+        appendMoveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2); _buf += "│";
     }
-
     appendMoveTo(BOARD_ROW + BOARD_H, BOARD_COL - 1);
     _buf += "└";
     for (int c = 0; c < BOARD_W; ++c) _buf += "──";
     _buf += "┘";
-
     _buf += RESET;
-}
 
-// ── Sidebar (only changed values are rewritten) ───────────────────────────────
-
-void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) {
-    const auto pr = [&](int r, const std::string& s) {
+    // Sidebar labels
+    const auto sl = [&](int r, std::string_view s) {
         appendMoveTo(r, SIDE_COL);
-        _buf += "\033[K";
         _buf += s;
     };
-
-    // Static header — written once alongside the border
-    if (!_borderDrawn) {
-        pr(BOARD_ROW,     "┌─────────────┐");
-        pr(BOARD_ROW + 1, "│    TETRIS   │");
-        pr(BOARD_ROW + 2, "└─────────────┘");
-        pr(BOARD_ROW + 4,  "  SCORE");
-        pr(BOARD_ROW + 7,  "  LEVEL");
-        pr(BOARD_ROW + 10, "  LINES");
-        pr(BOARD_ROW + 13, "  NEXT");
-        pr(BOARD_ROW + 20, "  CONTROLS");
-        pr(BOARD_ROW + 21, "  ←→  move");
-        pr(BOARD_ROW + 22, "  ↑   rotate");
-        pr(BOARD_ROW + 23, "  ↓   soft drop");
-        pr(BOARD_ROW + 24, "  SPC hard drop");
-        pr(BOARD_ROW + 25, "  Q   quit");
-    }
-
-    if (score != _prevScore) {
-        pr(BOARD_ROW + 5, "  " + std::to_string(score) + "      ");
-        _prevScore = score;
-    }
-    if (level != _prevLevel) {
-        pr(BOARD_ROW + 8, "  " + std::to_string(level));
-        _prevLevel = level;
-    }
-    if (lines != _prevLines) {
-        pr(BOARD_ROW + 11, "  " + std::to_string(lines));
-        _prevLines = lines;
-    }
-    if (nextPiece != _prevNext) {
-        // Clear previous next-piece preview
-        for (int r = 0; r < 4; ++r) {
-            appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL);
-            _buf += "        ";
-        }
-        // Draw new one
-        for (int r = 0; r < 4; ++r)
-            for (int c = 0; c < 4; ++c)
-                if (PIECES[nextPiece][0][r][c]) {
-                    appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
-                    _buf += pieceColor(nextPiece + 1);
-                    _buf += "██";
-                    _buf += RESET;
-                }
-        _prevNext = nextPiece;
-    }
+    sl(BOARD_ROW,     "┌─────────────┐");
+    sl(BOARD_ROW + 1, "│    TETRIS   │");
+    sl(BOARD_ROW + 2, "└─────────────┘");
+    sl(BOARD_ROW + 4,  "  SCORE");
+    sl(BOARD_ROW + 7,  "  LEVEL");
+    sl(BOARD_ROW + 10, "  LINES");
+    sl(BOARD_ROW + 13, "  NEXT");
+    sl(BOARD_ROW + 20, "  CONTROLS");
+    sl(BOARD_ROW + 21, "  ←→  move");
+    sl(BOARD_ROW + 22, "  ↑   rotate");
+    sl(BOARD_ROW + 23, "  ↓   soft drop");
+    sl(BOARD_ROW + 24, "  SPC hard drop");
+    sl(BOARD_ROW + 25, "  Q   quit");
 }
 
-// ── Main draw — double-buffered board diff ────────────────────────────────────
+// ── Main draw ─────────────────────────────────────────────────────────────────
 
 void AnsiRenderer::draw(const GameState& s) {
     _buf.clear();
+    _buf += BSU;  // begin synchronized update — terminal holds paint until ESU
 
-    if (!_borderDrawn) {
-        drawBorder();
-        _borderDrawn = true;
+    // Static content (border + labels) on first frame only
+    if (!_staticDrawn) {
+        drawStatic();
+        _staticDrawn = true;
     }
 
-    // ── Build back buffer ────────────────────────────────────────────────────
-    // Start with locked cells, then overlay ghost, then active piece.
+    // ── Build composite board ────────────────────────────────────────────────
     Board back = s.board;
-
     const auto& shape = PIECES[s.curPiece][s.curRot];
 
-    if (s.ghostY != s.curY) {
+    if (s.ghostY != s.curY)
         for (int r = 0; r < 4; ++r)
             for (int c = 0; c < 4; ++c)
                 if (shape[r][c]) {
@@ -211,7 +183,6 @@ void AnsiRenderer::draw(const GameState& s) {
                     if (br >= 0 && br < BOARD_H && bc >= 0 && bc < BOARD_W && !back[br][bc])
                         back[br][bc] = 8;
                 }
-    }
 
     for (int r = 0; r < 4; ++r)
         for (int c = 0; c < 4; ++c)
@@ -221,64 +192,72 @@ void AnsiRenderer::draw(const GameState& s) {
                     back[br][bc] = s.curPiece + 1;
             }
 
-    // ── Diff: row-based scan ─────────────────────────────────────────────────
-    // For each row that has at least one changed cell, write the whole row with
-    // a single moveTo then sequential cell output — no cursor jumping within a
-    // row, and far fewer escape sequences than one moveTo-per-cell.
+    // ── Write every board row ────────────────────────────────────────────────
+    // Full board every frame: no stale-state risk, cursor moves only forward.
+    // Color-run compression avoids redundant escape codes within a row.
     for (int r = 0; r < BOARD_H; ++r) {
-        // Quick dirty-check: skip rows with no changes
-        bool dirty = false;
-        for (int c = 0; c < BOARD_W && !dirty; ++c)
-            dirty = (back[r][c] != _front[r][c]);
-        if (!dirty) continue;
-
         appendMoveTo(BOARD_ROW + r, BOARD_COL);
-
-        // Color-run compression: only emit a new color escape when the color
-        // actually changes between adjacent cells.
-        int curColor = -1;
+        int cur = -1;
         for (int c = 0; c < BOARD_W; ++c) {
             const int id = back[r][c];
-            if (id != curColor) {
+            if (id != cur) {
                 _buf += (id == 0) ? RESET : std::string_view{pieceColor(id)};
-                curColor = id;
+                cur = id;
             }
             _buf += (id == 0) ? "  " : "██";
-            _front[r][c] = id;
         }
-        if (curColor != 0) _buf += RESET;  // leave terminal in default color
+        if (cur != 0) _buf += RESET;
     }
 
-    flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
+    // ── Sidebar dynamic values ───────────────────────────────────────────────
+    // Written every frame at fixed width — no \033[K needed, no blank flash.
+    appendMoveTo(BOARD_ROW + 5,  SIDE_COL);
+    appendPadded(_buf, "  " + std::to_string(s.score), 12);
 
-    // Park cursor at (1,1) — above all game content — so the NEXT frame's
-    // writes always travel strictly top-to-bottom with no backward jumps.
-    // A backward cursor movement triggers an immediate repaint on some
-    // terminals even inside a BSU/ESU block.
-    _buf += "\033[1;1H";
+    appendMoveTo(BOARD_ROW + 8,  SIDE_COL);
+    appendPadded(_buf, "  " + std::to_string(s.level), 6);
 
-    if (_buf == "\033[1;1H") return;  // only the park code — nothing changed
+    appendMoveTo(BOARD_ROW + 11, SIDE_COL);
+    appendPadded(_buf, "  " + std::to_string(s.totalLines), 6);
 
-    // Synchronized output: tell the terminal to hold rendering until ESU.
-    // Supported by kitty, iTerm2, VTE (GNOME Terminal, Tilix), foot, etc.
-    // Terminals that don't support it ignore the sequences harmlessly.
-    static constexpr std::string_view BSU = "\033[?2026h";  // Begin Sync Update
-    static constexpr std::string_view ESU = "\033[?2026l";  // End   Sync Update
+    // Next-piece preview — only redraw when it changes
+    if (s.nextPiece != _prevNext) {
+        for (int r = 0; r < 4; ++r) {
+            appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL);
+            _buf += "        ";  // clear 4 cells (8 chars)
+        }
+        for (int r = 0; r < 4; ++r)
+            for (int c = 0; c < 4; ++c)
+                if (PIECES[s.nextPiece][0][r][c]) {
+                    appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
+                    _buf += pieceColor(s.nextPiece + 1);
+                    _buf += "██";
+                    _buf += RESET;
+                }
+        _prevNext = s.nextPiece;
+    }
 
-    // Single writeAll — atomic delivery to PTY, avoids stdio buffering layers
-    const std::string frame = std::string(BSU) + _buf + std::string(ESU);
-    writeAll(STDOUT_FILENO, frame.data(), frame.size());
+    // Park cursor at top-left — next frame's writes are always top→bottom
+    _buf += HOME;
+    _buf += ESU;  // end synchronized update — terminal paints the complete frame
+
+    writeAll(STDOUT_FILENO, _buf.data(), _buf.size());
 }
 
 // ── Game over ─────────────────────────────────────────────────────────────────
 
 void AnsiRenderer::drawGameOver(int score) {
+    _buf.clear();
+    _buf += BSU;
     appendMoveTo(BOARD_ROW + BOARD_H / 2 - 1, BOARD_COL - 1);
     _buf += "\033[41m\033[97m  GAME  OVER   \033[0m";
     appendMoveTo(BOARD_ROW + BOARD_H / 2,     BOARD_COL - 1);
-    _buf += "\033[41m\033[97m  Score: " + std::to_string(score) + "     \033[0m";
+    _buf += "\033[41m\033[97m  Score: ";
+    _buf += std::to_string(score);
+    _buf += "        \033[0m";
     appendMoveTo(BOARD_ROW + BOARD_H / 2 + 1, BOARD_COL - 1);
     _buf += "\033[41m\033[97m  Press any key \033[0m";
+    _buf += ESU;
     writeAll(STDOUT_FILENO, _buf.data(), _buf.size());
     _buf.clear();
 
