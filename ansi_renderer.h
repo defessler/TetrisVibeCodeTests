@@ -1,6 +1,10 @@
 #pragma once
 // ANSI terminal renderer — no external dependencies beyond POSIX.
-// Writes the full board every frame inside BSU…ESU via a single write() call.
+//
+// Double-buffered: _front[r][c] tracks what is currently visible.
+// Only dirty rows are written each frame; if nothing changed, no write
+// is made at all. All output is batched into _buf and flushed with a
+// single write() syscall wrapped in BSU/ESU.
 
 #include "renderer.h"
 #include <array>
@@ -18,9 +22,16 @@ public:
     Action pollInput()               override;
 
 private:
-    termios     _saved{};
-    bool        _staticDrawn{false};
-    int         _prevNext{-1};
+    termios _saved{};
+
+    // Front buffer: color id currently on screen (-1 = never drawn)
+    std::array<std::array<int, BOARD_W>, BOARD_H> _front{};
+
+    // Sidebar state
+    int  _prevScore{-1}, _prevLevel{-1}, _prevLines{-1}, _prevNext{-1};
+    bool _staticDrawn{false};
+
+    // Output buffer — pre-reserved, reused each frame
     std::string _buf;
 
     static constexpr int BOARD_COL = 3;
