@@ -2,9 +2,9 @@
 // ANSI terminal renderer — no external dependencies beyond POSIX.
 //
 // Double-buffered: _front[r][c] tracks what is currently visible.
-// Only dirty rows are written each frame; if nothing changed, no write
+// Only dirty cells are written each frame; if nothing changed, no write
 // is made at all. All output is batched into _buf and flushed with a
-// single write() syscall wrapped in BSU/ESU.
+// single write() syscall.
 
 #include "renderer.h"
 #include <array>
@@ -29,7 +29,7 @@ private:
 
     // Sidebar state
     int  _prevScore{-1}, _prevLevel{-1}, _prevLines{-1}, _prevNext{-1};
-    bool _staticDrawn{false};
+    bool _borderDrawn{false};
 
     // Output buffer — pre-reserved, reused each frame
     std::string _buf;
@@ -39,7 +39,9 @@ private:
     static constexpr int SIDE_COL  = BOARD_COL + BOARD_W * 2 + 3;
 
     void appendMoveTo(int row, int col);
-    void drawStatic();
+    void appendCell(int colorId);
+    void drawBorder();
+    void flushSidebar(int score, int level, int lines, int nextPiece);
 
     [[nodiscard]] static const char* pieceColor(int id) noexcept;
 };
