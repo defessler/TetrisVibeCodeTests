@@ -10,6 +10,9 @@
 #elif defined(_WIN32)
 #  include "windows_renderer.h"
    using PlatformRenderer = WindowsRenderer;
+#elif defined(VULKAN_ART)
+#  include "vulkan_renderer.h"
+   using PlatformRenderer = VulkanRenderer;
 #elif defined(PIXEL_ART)
 #  include "pixel_renderer.h"
    using PlatformRenderer = PixelRenderer;
