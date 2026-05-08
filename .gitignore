@@ -1,0 +1,11 @@
+tetris
+tetris-pixel
+tetris-vulkan
+tetris-sdl2
+tetris.exe
+tetris-pixel.exe
+tests
+shaders/*.spv
+shaders/spirv_embed.h
+*.o
+# dist/ is intentionally tracked for pre-built binaries
