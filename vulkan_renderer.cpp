@@ -804,8 +804,8 @@ void VulkanRenderer::recordFrame(VkCommandBuffer cmd, VkFramebuffer fb,
     drawText(cmd, SIDE_X, sy, 2, LABEL_COLOR.r, LABEL_COLOR.g, LABEL_COLOR.b, "NEXT");
     sy += 7 * 2 + 6;
 
-    // Next-piece preview (small cells)
-    {
+    // Next-piece preview (small cells) – hidden during game-over overlay
+    if (gameOverScore < 0) {
         const int psize = 18;
         const int origX = SIDE_X;
         const int origY = sy;
@@ -911,8 +911,6 @@ void VulkanRenderer::drawGameOver(int score) {
 
         VkCommandBuffer cmd = _cmdBufs[_frameIdx];
         vkResetCommandBuffer(cmd, 0);
-        // Build a dummy GameState by reading the last actual frame
-        // is too fiddly — instead just clear-and-overlay using a synthetic state
         Board empty{};
         GameState dummy{empty, 0, 0, 0, -1, -1, 0, 0, 0, 0};
         recordFrame(cmd, _fbufs[imgIdx], dummy, score);
