@@ -24,7 +24,7 @@ const char* AnsiRenderer::pieceColor(int id) noexcept {
         case 3: return "\033[95m";
         case 4: return "\033[92m";
         case 5: return "\033[91m";
-        case 6: return "\033[34m";
+        case 6: return "\033[94m";
         case 7: return "\033[33m";
         case 8: return "\033[90m";
         case 9: return "\033[37m";
@@ -99,7 +99,7 @@ void AnsiRenderer::appendCell(int colorId) {
         _buf += "  ";
     } else {
         _buf += pieceColor(colorId);
-        _buf += "██";
+        _buf += "\xe2\x96\x88\xe2\x96\x88";  // ██
         _buf += RESET;
     }
 }
@@ -107,17 +107,17 @@ void AnsiRenderer::appendCell(int colorId) {
 void AnsiRenderer::drawBorder() {
     _buf += pieceColor(9);
     appendMoveTo(BOARD_ROW - 1, BOARD_COL - 1);
-    _buf += "┌";
-    for (int c = 0; c < BOARD_W; ++c) _buf += "──";
-    _buf += "┐";
+    _buf += "\xe2\x94\x8c";  // ┌
+    for (int c = 0; c < BOARD_W; ++c) _buf += "\xe2\x94\x80\xe2\x94\x80";  // ──
+    _buf += "\xe2\x94\x90";  // ┐
     for (int r = 0; r < BOARD_H; ++r) {
-        appendMoveTo(BOARD_ROW + r, BOARD_COL - 1);      _buf += "│";
-        appendMoveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2); _buf += "│";
+        appendMoveTo(BOARD_ROW + r, BOARD_COL - 1);      _buf += "\xe2\x94\x82";  // │
+        appendMoveTo(BOARD_ROW + r, BOARD_COL + BOARD_W * 2); _buf += "\xe2\x94\x82";
     }
     appendMoveTo(BOARD_ROW + BOARD_H, BOARD_COL - 1);
-    _buf += "└";
-    for (int c = 0; c < BOARD_W; ++c) _buf += "──";
-    _buf += "┘";
+    _buf += "\xe2\x94\x94";  // └
+    for (int c = 0; c < BOARD_W; ++c) _buf += "\xe2\x94\x80\xe2\x94\x80";
+    _buf += "\xe2\x94\x98";  // ┘
     _buf += RESET;
 }
 
@@ -129,17 +129,17 @@ void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) 
     };
 
     if (!_borderDrawn) {
-        pr(BOARD_ROW,      "┌─────────────┐");
-        pr(BOARD_ROW +  1, "│    TETRIS   │");
-        pr(BOARD_ROW +  2, "└─────────────┘");
+        pr(BOARD_ROW,      "\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90");  // ┌─────────────┐
+        pr(BOARD_ROW +  1, "\xe2\x94\x82    TETRIS   \xe2\x94\x82");  // │    TETRIS   │
+        pr(BOARD_ROW +  2, "\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98");  // └─────────────┘
         pr(BOARD_ROW +  4, "  SCORE");
         pr(BOARD_ROW +  7, "  LEVEL");
         pr(BOARD_ROW + 10, "  LINES");
         pr(BOARD_ROW + 13, "  NEXT");
         pr(BOARD_ROW + 20, "  CONTROLS");
-        pr(BOARD_ROW + 21, "  ←→  move");
-        pr(BOARD_ROW + 22, "  ↑   rotate");
-        pr(BOARD_ROW + 23, "  ↓   soft drop");
+        pr(BOARD_ROW + 21, "  \xe2\x86\x90\xe2\x86\x92  move");       // ←→
+        pr(BOARD_ROW + 22, "  \xe2\x86\x91   rotate");                 // ↑
+        pr(BOARD_ROW + 23, "  \xe2\x86\x93   soft drop");              // ↓
         pr(BOARD_ROW + 24, "  SPC hard drop");
         pr(BOARD_ROW + 25, "  Q   quit");
     }
@@ -158,7 +158,7 @@ void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) 
                 if (PIECES[nextPiece][0][r][c]) {
                     appendMoveTo(BOARD_ROW + 15 + r, SIDE_COL + c * 2);
                     _buf += pieceColor(nextPiece + 1);
-                    _buf += "██";
+                    _buf += "\xe2\x96\x88\xe2\x96\x88";  // ██
                     _buf += RESET;
                 }
         _prevNext = nextPiece;
@@ -168,10 +168,8 @@ void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) 
 void AnsiRenderer::draw(const GameState& s) {
     _buf.clear();
 
-    if (!_borderDrawn) {
+    if (!_borderDrawn)
         drawBorder();
-        _borderDrawn = true;
-    }
 
     Board back = s.board;
     const auto& shape = PIECES[s.curPiece][s.curRot];
@@ -202,6 +200,7 @@ void AnsiRenderer::draw(const GameState& s) {
             }
 
     flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
+    _borderDrawn = true;
 
     if (!_buf.empty())
         writeAll(STDOUT_FILENO, _buf.data(), _buf.size());
