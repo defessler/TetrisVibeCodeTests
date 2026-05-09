@@ -24,7 +24,7 @@ const char* AnsiRenderer::pieceColor(int id) noexcept {
         case 3: return "\033[95m";
         case 4: return "\033[92m";
         case 5: return "\033[91m";
-        case 6: return "\033[34m";
+        case 6: return "\033[94m";
         case 7: return "\033[33m";
         case 8: return "\033[90m";
         case 9: return "\033[37m";
@@ -168,10 +168,8 @@ void AnsiRenderer::flushSidebar(int score, int level, int lines, int nextPiece) 
 void AnsiRenderer::draw(const GameState& s) {
     _buf.clear();
 
-    if (!_borderDrawn) {
+    if (!_borderDrawn)
         drawBorder();
-        _borderDrawn = true;
-    }
 
     Board back = s.board;
     const auto& shape = PIECES[s.curPiece][s.curRot];
@@ -202,6 +200,7 @@ void AnsiRenderer::draw(const GameState& s) {
             }
 
     flushSidebar(s.score, s.level, s.totalLines, s.nextPiece);
+    _borderDrawn = true;
 
     if (!_buf.empty())
         writeAll(STDOUT_FILENO, _buf.data(), _buf.size());

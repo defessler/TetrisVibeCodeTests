@@ -804,8 +804,8 @@ void VulkanRenderer::recordFrame(VkCommandBuffer cmd, VkFramebuffer fb,
     drawText(cmd, SIDE_X, sy, 2, LABEL_COLOR.r, LABEL_COLOR.g, LABEL_COLOR.b, "NEXT");
     sy += 7 * 2 + 6;
 
-    // Next-piece preview (small cells)
-    {
+    // Next-piece preview (small cells) – hidden during game-over overlay
+    if (gameOverScore < 0) {
         const int psize = 18;
         const int origX = SIDE_X;
         const int origY = sy;

@@ -14,7 +14,7 @@ const char* WindowsRenderer::pieceColor(int id) noexcept {
         case 3: return "\033[95m";
         case 4: return "\033[92m";
         case 5: return "\033[91m";
-        case 6: return "\033[34m";
+        case 6: return "\033[94m";
         case 7: return "\033[33m";
         case 8: return "\033[90m";
         case 9: return "\033[37m";
